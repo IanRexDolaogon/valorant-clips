@@ -1,0 +1,9 @@
+.env
+__pycache__/
+.venv/
+node_modules/
+dist/
+*.mp4
+*.mkv
+storage/
+pgdata/
