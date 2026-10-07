@@ -26,6 +26,7 @@ Added project-approved dependencies: Alembic, Argon2, PyJWT, Redis, RQ and boto3
 - Fresh Docker stack: PostgreSQL, Redis, API and frontend health checks passed; separate worker stayed running and completed actual RQ jobs.
 - Docker smoke pipeline: passed through the Nginx proxy with synthetic match events and a three-second generated MP4, including both FFmpeg modes, playable signed media, shares and authorization failures.
 - Browser media state after the fix: duration **3 seconds**, `readyState=4`, `error=null`, for both owner preview and anonymous public-page playback.
+- GitHub Actions: **backend-tests** and **docker-pipeline** passed for implementation commit `5a5e5a7` on [PR #4](https://github.com/IanRexDolaogon/valorant-clips/pull/4). Subsequent documentation commits must also retain green PR checks.
 
 ## Issues found and fixed during verification
 
@@ -44,4 +45,4 @@ Added project-approved dependencies: Alembic, Argon2, PyJWT, Redis, RQ and boto3
 - DigitalOcean hosting, HTTPS and operational logging.
 - Portfolio screenshots and final production documentation.
 
-No development database reset or `.env` edit was performed during this close-out. Only the isolated `vclips-smoke` project was reset for repeat verification. The PR is for review; it must not be merged until its CI checks pass.
+No development database reset or `.env` edit was performed during this close-out. Only the isolated `vclips-smoke` project was reset for repeat verification, then removed with its test storage. The PR remains open and unmerged for review.

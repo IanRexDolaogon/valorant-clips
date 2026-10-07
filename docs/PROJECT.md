@@ -66,7 +66,7 @@ Do not add dependencies without a clear reason; ask first.
 - [x] PostgreSQL baseline (10 tables); Alembic now manages initialization
 - [x] FastAPI skeleton with `GET /health`, first pytest passing
 - [x] `backend/Dockerfile` (`python:3.12-slim`)
-- [ ] GitHub Actions CI — PostgreSQL backend tests and Docker pipeline jobs implemented; confirm remote PR checks before merge
+- [x] GitHub Actions CI — PostgreSQL backend tests and the Docker pipeline passed on PR #4; require green checks before merge
 - [x] Settings (`pydantic-settings`) + SQLAlchemy session
 - [x] Alembic migrations (replace raw `schema.sql` auto-load), schema constraints/index checks, real DB health test
 - [x] Auth: register/login, Argon2 password hashing, JWT, ownership checks, Redis rate limiting and tests
