@@ -120,6 +120,16 @@ Uploads default to 20 GiB maximum, with chunks up to 8 MiB. All storage paths us
 
 The default worker runs one job at a time; progress records stages rather than frame-level percentages. Stream copy is keyframe-dependent. Failed jobs are recorded, but user-facing retry/recovery for interrupted processing is still future work. Peak-memory metrics are measured in Linux worker child processes; Windows helper runs return no memory measurement. Large uploads, native picker behaviour and other browsers need broader manual QA. Tiny smoke-fixture timings are validation data, not performance benchmarks.
 
+## Free deployment limitations
+
+Treat a free deployment as a **small, low-traffic portfolio demo**, not a promise of unrestricted public uploads or reliable production video processing. A free frontend or API tier alone does not cover this app's PostgreSQL, Redis/RQ worker, FFmpeg compute and recording storage requirements. Verify current provider limits, persistence, worker support, sleep behaviour and overage charges before choosing a host; no free hosting provider has been validated for this project yet.
+
+The current upload pipeline assembles the full recording on local disk before validation and optional publication to S3-compatible storage. The worker also needs a local source file and space for temporary and completed clips. **Configuring Spaces or another object store does not remove local staging-disk requirements.** With the default Compose setup, the API and worker share `storage/`; splitting them across hosts requires a deliberate storage design, not just separate deployments.
+
+Before a public demo, lower the default 20 GiB upload limit to fit measured host capacity, add per-user storage quotas and retention/cleanup, and budget disk for recordings, clip output and concurrent work. Quotas and automatic cleanup are not implemented yet. Verify long-running worker support, container/CPU architecture compatibility, HTTPS, backups and recovery from restarts. Do not rely on free-tier availability or local disk as the only copy of important data.
+
+DigitalOcean remains the planned production target. A free VM running the existing Compose stack may be evaluated as a demo alternative, but this is not a hosting migration or a verified deployment.
+
 ## Riot access
 
 Daily developer keys are insufficient to assume VALORANT access. Live linking needs Riot approval, RSO and explicit player opt-in. [Riot VALORANT policy](https://developer.riotgames.com/docs/valorant), [Riot FAQ](https://developer.riotgames.com/docs/faqs).

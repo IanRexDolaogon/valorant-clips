@@ -185,6 +185,14 @@ pytest -v
 - `.env` is gitignored. Add new variables to `.env.example` with placeholder values.
 - Project root contains a space in a parent folder name; quote paths in scripts.
 
+### Free deployment limitations
+
+- **Free hosting is a constrained portfolio-demo option, not a production guarantee.** A frontend/API-only tier does not cover the full PostgreSQL, Redis/RQ, long-running FFmpeg worker and video-storage stack. No free provider has been validated for this project; check current resource limits, persistence, worker support, sleep/reclamation behaviour and overage charges before deployment. Do not hard-code changing provider allowances as project guarantees.
+- **Object storage does not eliminate local disk needs.** Uploads are assembled locally before ffprobe validation and optional S3 publication. Workers need local source files plus temporary/output clip space. The default API/worker share `storage/`; deploying them on separate hosts requires an explicit staging/storage design.
+- The default **20 GiB per-upload limit is an application ceiling, not a safe free-tier capacity target**. Before public demo uploads, reduce it to measured host capacity and implement per-user quotas and retention/cleanup. Those controls are not implemented yet; account for accumulated recordings, clips and concurrent work, not just one upload.
+- Validate worker compute/memory, CPU architecture compatibility, HTTPS, backups and restart recovery. Free-tier availability and local disk must not be the only protection for important data. Unrestricted public uploads and reliable video processing must not be advertised as free-tier capabilities without evidence.
+- DigitalOcean remains the planned production target. A free VM running Compose may be evaluated for a small demo; this documentation does not change the hosting architecture or establish a verified deployment. See README's "Free deployment limitations" section.
+
 ---
 
 ## 7. Conventions
