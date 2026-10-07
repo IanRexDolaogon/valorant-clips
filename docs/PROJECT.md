@@ -1,0 +1,262 @@
+# PROJECT.md — Valorant Clips
+
+Project reference for AI coding agents working in this repo: **what** we are building and the rules of the codebase. Read fully before making changes.
+
+- `AGENTS.md` (repo root) is the entry point and points here.
+- `.agents/skills/` holds the workflow skills (e.g. `ponytail.md`) that define **how** agents work.
+
+> **Individual Project.** One developer owns this codebase and must be able to explain every part of it without AI help. Favor simple, readable code over clever code, and explain non-obvious decisions in your replies.
+
+---
+
+## 1. What we're building
+
+A web app where Valorant players turn match recordings into shareable kill clips.
+
+**User flow**
+1. User signs up and links their Riot account.
+2. App pulls a match from Riot's match API and stores its kill events (with timestamps).
+3. User picks their locally recorded video (OBS, ShadowPlay, etc.) via the browser **File System Access API** and uploads it.
+4. User sets a **sync offset** aligning the video to the match clock.
+5. A background worker cuts one clip per kill with FFmpeg.
+6. User shares a clip via an unguessable public link.
+
+**Why this design**
+- Valorant's in-game replay files (`.vrp`) are proprietary and tied to the game client/patch. We do **not** parse them and do **not** attempt to. Kill data comes from Riot's API; video comes from the user's own recording.
+- A website cannot silently read local files. We use the File System Access API (Chromium only; fallback `<input type="file">` elsewhere). A desktop companion agent is explicitly **out of scope** for now.
+
+**Core technical problems (the portfolio value)**
+- Kill-to-video time sync (API timeline ↔ video offset).
+- Async clip pipeline (FFmpeg stream-copy vs re-encode, job tracking).
+- Measurable performance: clip time/memory by method, chunked vs single upload, query time with/without indexes on a large seeded `kill_events` table.
+- Security: upload validation, signed URLs, share-link authorization, rate limiting.
+
+**Clip math**
+```
+clip_start_ms = kill.time_since_game_start_ms + video.sync_offset_ms - PADDING_BEFORE
+clip_end_ms   = kill.time_since_game_start_ms + video.sync_offset_ms + PADDING_AFTER
+```
+`sync_offset_ms` = milliseconds into the video at which the match clock equals 0.
+
+---
+
+## 2. Tech stack
+
+| Layer | Choice |
+|---|---|
+| Frontend | React + Vite |
+| Backend | FastAPI (Python 3.12) |
+| DB | PostgreSQL 16 |
+| Queue | Redis + RQ (or Celery) |
+| Video | FFmpeg (worker) |
+| Storage | DigitalOcean Spaces (S3-compatible); local `storage/` in dev |
+| Tests | pytest + httpx/TestClient |
+| Containers | Docker + Docker Compose |
+| CI/CD | GitHub Actions |
+| Hosting | DigitalOcean (Droplet running Docker) |
+
+Do not add dependencies without a clear reason; ask first.
+
+---
+
+## 3. Current status
+
+- [x] Repo, `.gitignore`, `.env.example`
+- [x] Docker Compose: `db` (Postgres), `redis`, `api`
+- [x] `schema.sql` loaded into Postgres on first init (10 tables)
+- [x] FastAPI skeleton with `GET /health`, first pytest passing
+- [x] `backend/Dockerfile` (`python:3.12-slim`)
+- [ ] GitHub Actions CI (tests on push/PR) — verify it's green
+- [ ] Settings (`pydantic-settings`) + SQLAlchemy session
+- [ ] Alembic migrations (replace raw `schema.sql` auto-load)
+- [ ] Auth: register/login, password hashing, JWT, tests
+- [ ] Riot client + match/kill ingestion
+- [ ] Video upload (chunked) + validation
+- [ ] Sync offset + clip planner
+- [ ] FFmpeg worker + job tracking
+- [ ] Shares + public clip page
+- [ ] Frontend (folder picker, uploader, clip editor, share UI)
+- [ ] Benchmarks, security pass, deployment, README, screenshots
+
+Update this checklist when you finish an item.
+
+---
+
+## 4. Repo layout
+
+```
+valorant-clips/
+├── backend/
+│   ├── app/
+│   │   ├── api/          # routers: auth, matches, videos, clips, shares
+│   │   ├── core/         # config, security, dependencies
+│   │   ├── models/       # SQLAlchemy models
+│   │   ├── schemas/      # Pydantic request/response models
+│   │   ├── services/     # riot_client, sync, clip_planner, storage
+│   │   ├── workers/      # RQ tasks (FFmpeg jobs)
+│   │   └── main.py
+│   ├── alembic/          # (planned)
+│   ├── tests/
+│   ├── Dockerfile
+│   ├── pytest.ini
+│   └── requirements.txt
+├── frontend/             # React + Vite (planned)
+│   └── src/features/     # folder-picker, uploader, clip-editor, share
+├── .github/workflows/ci.yml
+├── docker-compose.yml
+├── schema.sql            # initial schema; becomes reference doc after Alembic
+├── .env.example          # committed; real .env is NOT
+├── .agents/skills/       # agent workflow skills (ponytail.md, ...)
+├── docs/PROJECT.md       # this file
+└── AGENTS.md             # entry point; links skills + this file
+```
+
+Keep routers thin (parse/validate → call service → return). Business logic lives in `services/`. Database access stays out of routers where practical.
+
+---
+
+## 5. Database
+
+Tables: `users`, `riot_accounts`, `matches`, `match_players`, `rounds`, `kill_events`, `videos`, `clips`, `shares`, `processing_jobs`. Full DDL in `schema.sql`.
+
+Key relationships
+- `users 1—N riot_accounts`, `users 1—N videos`
+- `matches 1—N rounds 1—N kill_events` (composite FK `kill_events(match_id, round_number) → rounds`)
+- `videos 1—N clips`; `clips.kill_event_id → kill_events` (nullable, SET NULL)
+- `clips 1—N shares` (public lookup by unique `shares.token`)
+- `processing_jobs` stores per-job wall time and peak memory (benchmark data)
+
+Important indexes
+- `kill_events(match_id, time_since_game_start_ms)` — main access pattern
+- `shares(token)` unique — public link lookup
+- partial index on `clips(status)` for queued/processing
+
+Rules
+- Never edit the schema ad hoc. Once Alembic exists, every change is a migration.
+- Use constraints (CHECK, FK, UNIQUE) rather than relying on app code alone.
+- Wrap multi-step writes (e.g. match + rounds + kills ingestion) in a transaction.
+- Use parameterized queries / ORM only. No string-built SQL.
+
+---
+
+## 6. Environment and commands
+
+Developer machine is **Windows + PowerShell**. Give PowerShell commands, not bash.
+
+```powershell
+# Start / stop / reset
+docker compose up -d --build
+docker compose ps
+docker compose logs api
+docker compose down          # stop
+docker compose down -v       # stop AND wipe DB volume (re-runs schema.sql)
+
+# DB shell
+docker compose exec db psql -U vclips -d vclips -c "\dt"
+
+# Backend tests (from backend/, venv active)
+cd backend
+.\.venv\Scripts\Activate.ps1
+pytest -v
+```
+
+- Local venv uses Python 3.12 (`py -3.12 -m venv .venv`). Containers and CI also use 3.12.
+- API runs at `http://localhost:8000` (Swagger at `/docs`).
+- `.env` is gitignored. Add new variables to `.env.example` with placeholder values.
+- Project root contains a space in a parent folder name; quote paths in scripts.
+
+---
+
+## 7. Conventions
+
+**Code**
+- Clear names, small functions, no duplication, no dead code.
+- Type hints on Python functions. Pydantic schemas for all request/response bodies.
+- Consistent error handling: raise `HTTPException` with correct status codes; never leak stack traces or internals to clients.
+- No hard-coded secrets, URLs, or magic numbers; use settings.
+
+**Git**
+- Branch per feature: `feat/<name>`, `fix/<name>`, `chore/<name>`, `ci/<name>`.
+- Conventional commit messages (`feat(api): ...`, `fix(db): ...`).
+- Open a PR into `main`; merge only when CI is green.
+- Never commit `.env`, API keys, credentials, videos, or `.venv`.
+
+**Diffs**
+- Prefer small, targeted changes over rewrites. Show only what changed and why.
+- One concern per commit/PR.
+
+---
+
+## 8. Testing requirements
+
+Every feature ships with tests. Minimum coverage areas: authentication, key endpoints, validation errors, business logic (especially sync/clip math), and failure cases.
+
+- Framework: pytest, FastAPI `TestClient`.
+- Use a separate test database (Postgres service container in CI); do not test against dev data.
+- Test names describe behavior (`test_register_rejects_duplicate_email`).
+- Pure logic (sync offset, clip window calculation) gets unit tests with no DB.
+- FFmpeg tests use tiny generated fixtures, not real recordings.
+
+---
+
+## 9. Security rules (non-negotiable)
+
+- Passwords hashed with a modern algorithm (argon2 or bcrypt). Never log or return hashes.
+- JWT auth; check ownership on every video/clip/share operation (authorization, not just authentication).
+- Validate all input with Pydantic; enforce size/type limits on uploads and confirm with `ffprobe` (do not trust extension or MIME header).
+- Never pass user-controlled strings into a shell. Call FFmpeg with an argument list (`subprocess.run([...])`), never `shell=True`. Generate storage keys server-side; ignore client filenames for paths.
+- Share tokens: cryptographically random (`secrets.token_urlsafe`), unique, optionally expiring. Private clips served via signed URLs.
+- Rate-limit auth, upload, and share endpoints.
+- Riot API key lives in env only; never in code, logs, tests, or commits.
+
+---
+
+## 10. Riot API and legal notes
+
+- Match/kill data comes from Riot's Valorant match API (VAL-MATCH-V1). Verify current endpoints and fields in Riot's docs before coding against them.
+- A personal dev key only works for the owner's account and **expires every 24h**. A production key requires an approved application; assume dev-key limits while building and isolate the client in `services/riot_client.py` so it's easy to mock.
+- Respect rate limits; cache responses; never hammer the API in loops.
+- The site needs a disclaimer that it is **not endorsed by or affiliated with Riot Games**. Do not use Riot logos or branding as if official.
+- Do not build features that read game memory, hook the client, or touch anti-cheat territory.
+
+---
+
+## 11. Out of scope (for now)
+
+- Desktop companion agent / auto-upload
+- Parsing `.vrp` replay files
+- Automatic kill detection from video (computer vision)
+- AI features (only add if it solves a real problem and is documented)
+- Social features (comments, feeds, follows)
+
+---
+
+## 12. Working agreement for agents
+
+**Skills and precedence**
+- `AGENTS.md` is the Ponytail skill (lazy senior dev mode) and is the entry point. Follow it for *how* to work: climb the ladder, reuse before writing, fix root causes, shortest correct diff, mark corner-cutting with a `ponytail:` comment naming the ceiling and upgrade path.
+- This file decides project facts, schema, security, and scope. Where the two conflict, the overrides below apply.
+
+**Project overrides to Ponytail**
+1. **Tests.** Ponytail's "one small check" is the floor for internal helpers. Features must ship pytest tests per section 8 (auth, validation, failure cases, business logic). pytest and fixtures (`conftest.py`) are the project standard here.
+2. **Structure.** Section 4 is the target layout, not a to-do list. Create a folder or file only when its first real code arrives. No empty placeholder modules, no service layer until there is logic to put in it.
+3. **Dependencies.** The stack in section 2 is pre-approved. Expected additions (password hashing, JWT, Alembic, RQ, S3 client) are fine when the feature needs them. Anything else: try ladder rung 5 first, then ask.
+4. **Questioning requests.** Challenge scope inside a feature. Do not relitigate decisions already settled in sections 1, 2 and 11 (stack, architecture, out of scope).
+5. **Benchmarks.** Measurement code (timing, memory, seeded datasets) is a project deliverable, not gold plating.
+6. **Never skipped, even for a smaller diff:** input validation at trust boundaries, auth/ownership checks, upload validation, error handling that prevents data loss (Ponytail agrees, section 9 lists the specifics).
+
+**Rules**
+
+1. Read this file and the relevant code before changing anything.
+2. State your plan briefly; ask when requirements are ambiguous rather than guessing.
+3. Make the smallest change that works. Don't refactor unrelated code.
+4. Run `pytest` before declaring work done. Report real output, not assumptions.
+5. Don't add dependencies, change the schema, or alter CI/Docker config without saying so explicitly.
+6. Explain *why* for non-obvious choices so the owner can defend them in an interview.
+7. Update the status checklist in section 3 when an item is completed.
+
+---
+
+## 13. Definition of done (project level)
+
+Functional app; responsive frontend; working API; PostgreSQL implemented; auth/authorization; validation and error handling; Docker works locally; tests exist and pass reliably; clean GitHub repo with no secrets; CI green; deployed on DigitalOcean with HTTPS and logging; README with architecture diagram, API docs and screenshots; owner can explain the whole system unaided.
