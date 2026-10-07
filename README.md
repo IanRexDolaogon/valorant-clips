@@ -1,6 +1,6 @@
 # Valorant Clips
 
-Turn your own match recording into kill clips using Riot match timestamps and a manual video offset. The local recording-to-share pipeline is implemented and validated. Live Riot approval, Spaces verification, benchmarks, complete security review and deployment remain open. See [docs/PROJECT.md](docs/PROJECT.md) for scope and [docs/VALIDATION.md](docs/VALIDATION.md) for the change report and evidence.
+Portfolio/CV demo: turn a short recording into kill clips using match timestamps and a manual video offset. Uploads are limited to **10 MB / 15 seconds**, with **72-hour media expiry**. Run locally for zero hosting/storage spend; production availability and paid deployment are out of scope. See [docs/PROJECT.md](docs/PROJECT.md) for scope and [docs/VALIDATION.md](docs/VALIDATION.md) for evidence.
 
 ## Local setup (PowerShell)
 
@@ -30,7 +30,7 @@ For local development without Riot approval, create synthetic match events:
 docker compose exec api python -m app.demo
 ```
 
-This prompts for a new demo email/password, creates a clearly labelled synthetic match with kills at 5, 15 and 25 seconds, and refuses to run in production mode. Upload a recording of at least 30 seconds to that match. It does not verify or impersonate a Riot account.
+This prompts for a new demo email/password, creates a clearly labelled synthetic match with kills at 3, 7 and 11 seconds, and refuses to run in production mode. Upload a 12–15 second recording no larger than 10 MB. It does not verify or impersonate a Riot account.
 
 ## Architecture
 
@@ -41,11 +41,13 @@ flowchart LR
     API --> DB[(PostgreSQL)]
     API --> Redis[(Redis: auth limits and RQ)]
     API --> Riot[Riot API and approved RSO]
-    API --> Storage[Local storage or private Spaces]
+    API --> Storage[Local storage or optional private S3/R2]
     Worker[RQ worker] --> DB
     Worker --> Redis
     Worker --> FFmpeg[FFmpeg / ffprobe]
     Worker --> Storage
+    Cron[Hourly cleanup] --> Storage
+    Cron --> DB
 ```
 
 ## Existing database adoption
@@ -84,8 +86,10 @@ From the repository root, using a distinct project and localhost ports 18080/180
 
 ```powershell
 $env:SMOKE_JWT_SECRET = (& py -3.12 -c "import secrets; print(secrets.token_urlsafe(48))")
-docker compose -p vclips-smoke --env-file .env.example -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait db redis api worker frontend
+docker compose -p vclips-smoke --env-file .env.example -f docker-compose.yml -f docker-compose.smoke.yml up -d --build --wait db redis api worker cleanup frontend
 docker compose -p vclips-smoke --env-file .env.example -f docker-compose.yml -f docker-compose.smoke.yml exec -T api python -m tests.smoke_docker
+docker compose -p vclips-smoke --env-file .env.example -f docker-compose.yml -f docker-compose.smoke.yml exec -T cleanup crontab -l
+docker compose -p vclips-smoke --env-file .env.example -f docker-compose.yml -f docker-compose.smoke.yml exec -T cleanup python -m app.workers.cleanup --cron
 ```
 
 The check generates a tiny recording, creates disposable synthetic match data, uploads through Nginx, verifies resumable offsets and validation, then waits for the **real Redis/RQ worker** to cut clips in both modes. It checks wall-time/memory metrics, signed playback, private-share rejection, expiry, revocation, cross-user access and the real Redis auth limit. It refuses any database except `vclips_smoke_test`. The smoke account credentials are test fixtures only.
@@ -112,13 +116,17 @@ Swagger at `/docs` documents request/response bodies. Protected routes use `Auth
 | Clip jobs | `POST /videos/{id}/clips`, `GET /videos/{id}/clips` |
 | Preview/sharing | `GET /clips/{id}/media`, `POST /clips/{id}/shares`, `GET /shares/{token}`, `DELETE /shares/{token}` |
 
-Uploads default to 20 GiB maximum, with chunks up to 8 MiB. All storage paths use server-generated keys. `ffprobe` validates the actual media. Local signed playback links expire after at most 60 seconds; refresh via Preview or the public page. Local playback rechecks share revocation on each request. Spaces URLs remain usable until their short signed expiry.
+Uploads have a strict **10 MB (10,000,000 bytes)** ceiling, with chunks up to 8 MiB. Middleware rejects oversized video request bodies with 413 before routing; declared total size and chunk offsets enforce the same ceiling across requests. `MAX_UPLOAD_BYTES` may lower the ceiling but cannot increase it. `ffprobe` rejects videos longer than **15 seconds** with 400 before publication/processing. All storage paths use generated keys.
+
+The database generates `videos.expires_at = created_at + 72 hours`. API access and signed media URLs stop at expiry. The `cleanup` container runs cron at minute zero each hour: delete bucket objects (if configured), then local source/clip files, then the video row. Foreign keys delete its clips, shares and processing jobs. Failed storage deletion retains the row for retry. Accounts and shared match metadata remain for reuse. Physical removal can lag expiry by up to an hour, or longer if the stack is stopped. This is disposable demo media, not archival storage.
+
+To run cleanup immediately: `docker compose exec cleanup python -m app.workers.cleanup`. Migration `0004` applies expiry to existing uploads using their original creation time, so old demo media will be removed on the next cleanup run. Signed playback links otherwise last at most 60 seconds; local playback rechecks revocation.
 
 ## Configuration and remaining work
 
 `.env.example` lists Riot RSO credentials, public URLs and optional Spaces settings. Use a private Spaces bucket; never publish its access keys. Set `APP_ENV=production`, a strong JWT secret, and HTTPS `FRONTEND_URL`/`PUBLIC_API_URL` before production startup. Hosting and TLS provisioning are not included yet.
 
-The default worker runs one job at a time; progress records stages rather than frame-level percentages. Stream copy is keyframe-dependent. Failed jobs are recorded, but user-facing retry/recovery for interrupted processing is still future work. Peak-memory metrics are measured in Linux worker child processes; Windows helper runs return no memory measurement. Large uploads, native picker behaviour and other browsers need broader manual QA. Tiny smoke-fixture timings are validation data, not performance benchmarks.
+Run one RQ worker replica: one job at a time, capped at one CPU, with one FFmpeg codec thread. FFmpeg transcoding never runs in the API. A database lock keeps publication and cleanup from racing; polling sees queued jobs until the final ready/failure commit. Stream copy is keyframe-dependent. Failed jobs are recorded; restart recovery/retry remains outside this change. Peak-memory metrics are measured in Linux child processes. Native picker and cross-browser QA remain open; tiny fixture timings are not benchmarks.
 
 ## Free deployment limitations
 
@@ -126,9 +134,9 @@ Treat a free deployment as a **small, low-traffic portfolio demo**, not a promis
 
 The current upload pipeline assembles the full recording on local disk before validation and optional publication to S3-compatible storage. The worker also needs a local source file and space for temporary and completed clips. **Configuring Spaces or another object store does not remove local staging-disk requirements.** With the default Compose setup, the API and worker share `storage/`; splitting them across hosts requires a deliberate storage design, not just separate deployments.
 
-Before a public demo, lower the default 20 GiB upload limit to fit measured host capacity, add per-user storage quotas and retention/cleanup, and budget disk for recordings, clip output and concurrent work. Quotas and automatic cleanup are not implemented yet. Verify long-running worker support, container/CPU architecture compatibility, HTTPS, backups and recovery from restarts. Do not rely on free-tier availability or local disk as the only copy of important data.
+The 10 MB / 15-second limits and hourly retention cleanup keep controlled demo use small. They do not cap aggregate traffic or guarantee a provider's free allowance. Per-user quotas are not implemented. Use local Compose and synthetic fixtures for zero-spend demonstrations; no remote bucket or paid infrastructure is provisioned.
 
-DigitalOcean remains the planned production target. A free VM running the existing Compose stack may be evaluated as a demo alternative, but this is not a hosting migration or a verified deployment.
+DigitalOcean deployment and production availability are out of scope for this CV project. No remote free hosting provider has been validated.
 
 ## Riot access
 

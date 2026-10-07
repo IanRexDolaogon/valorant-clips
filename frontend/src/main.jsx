@@ -81,6 +81,7 @@ function App() {
   }
   async function upload() {
     if (!file || !matchId) throw new Error('Choose a match and a recording first.');
+    if (file.size > 10_000_000) throw new Error('Choose a video no larger than 10 MB.');
     let row = video?.status === 'uploading' ? video : await api('/videos', { method: 'POST', body: JSON.stringify({
       match_id: Number(matchId), original_name: file.name, size_bytes: file.size,
     }) });
@@ -152,7 +153,7 @@ function App() {
             <p className="hint">{kills.length} kill events available</p>
           </section>
           <section className="panel"><span className="step">02 / RECORDING</span><h2>Bring the footage.</h2>
-            <div className="upload-box"><span className="upload-symbol">↥</span><strong>{file?.name || 'Choose your match recording'}</strong><span className="hint">MP4, MKV or WebM · up to 20 GB</span>
+            <div className="upload-box"><span className="upload-symbol">↥</span><strong>{file?.name || 'Choose your match recording'}</strong><span className="hint">MP4, MKV or WebM · up to 10 MB / 15 seconds · removed after 72 hours</span>
               <label className="file-label">Select a file<input type="file" accept=".mp4,.mkv,.webm" onChange={e => selectFile(e.target.files[0] || null)} /></label>
               {window.showDirectoryPicker && <button className="quiet" disabled={busy} onClick={() => act(pickFolder)}>Or open a recording folder</button>}
             </div>

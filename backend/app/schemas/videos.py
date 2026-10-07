@@ -1,4 +1,5 @@
 from typing import Literal
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +19,7 @@ class Video(BaseModel):
     duration_ms: int | None
     sync_offset_ms: int
     status: str
+    expires_at: datetime
 
 
 class Offset(BaseModel):

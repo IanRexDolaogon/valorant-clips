@@ -13,6 +13,8 @@ from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from app.core.db import SessionLocal
+from app.services import storage
+from app.workers.cleanup import cleanup
 
 
 def run() -> None:
@@ -107,6 +109,20 @@ def run() -> None:
         request("POST", f"/clips/{clip_id}/shares", 404, json={})
         request("DELETE", "/shares/" + private["token"], 404)
         print("PASS: cross-user video, clip and share authorization", flush=True)
+        with SessionLocal() as db:
+            keys = [db.scalar(text("SELECT storage_key FROM videos WHERE id=:id"), {"id": video_id}),
+                *db.scalars(text("SELECT storage_key FROM clips WHERE video_id=:id"), {"id": video_id}).all()]
+            db.execute(text("UPDATE videos SET created_at=now()-interval '73 hours' WHERE id=:id"), {"id": video_id})
+            db.commit()
+        client.headers["Authorization"] = owner
+        request("GET", f"/videos/{video_id}", 404)
+        request("GET", "/shares/" + private["token"], 404)
+        assert cleanup() == 1
+        assert all(not storage.path_for(key).exists() for key in keys)
+        with SessionLocal() as db:
+            assert db.scalar(text("SELECT count(*) FROM processing_jobs")) == 0
+            assert db.scalar(text("SELECT count(*) FROM shares")) == 0
+        print("PASS: 72-hour media expiry, file deletion and cascading record cleanup", flush=True)
     with httpx.Client(base_url="http://api:8000", timeout=15) as direct:
         statuses = [direct.post("/auth/login", json={**account, "password": "incorrect-smoke-password"}).status_code for _ in range(21)]
         assert 401 in statuses and statuses[-1] == 429

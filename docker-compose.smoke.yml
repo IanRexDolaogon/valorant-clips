@@ -36,6 +36,14 @@ services:
       STORAGE_BUCKET: ""
     volumes: !override ["smoke-storage:/app/storage"]
 
+  cleanup:
+    env_file: !override [.env.example]
+    environment:
+      DATABASE_URL: postgresql+psycopg://vclips_test:smoke-only@db:5432/vclips_smoke_test
+      JWT_SECRET: ${SMOKE_JWT_SECRET:?Set a random SMOKE_JWT_SECRET before validation}
+      STORAGE_BUCKET: ""
+    volumes: !override ["smoke-storage:/app/storage"]
+
   frontend:
     ports: !override ["127.0.0.1:18080:80"]
 

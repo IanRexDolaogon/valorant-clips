@@ -12,7 +12,7 @@ from app.services import matches, storage
 
 
 def owned_video(db: Session, user_id: int, video_id: int, *, lock: bool = False) -> dict:
-    query = "SELECT * FROM videos WHERE id=:id AND user_id=:uid"
+    query = "SELECT * FROM videos WHERE id=:id AND user_id=:uid AND expires_at>now()"
     if lock:
         query += " FOR UPDATE"
     video = db.execute(text(query), {"id": video_id, "uid": user_id}).mappings().first()

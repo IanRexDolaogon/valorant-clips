@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -20,7 +21,7 @@ class Settings(BaseSettings):
     riot_account_url: str = "https://asia.api.riotgames.com/riot/account/v1/accounts/me"
     frontend_url: str = "http://localhost:5173"
     storage_dir: Path = Path("storage")
-    max_upload_bytes: int = 20 * 1024 * 1024 * 1024
+    max_upload_bytes: int = Field(default=10_000_000, gt=0, le=10_000_000)
     max_chunk_bytes: int = 8 * 1024 * 1024
     upload_requests_per_minute: int = 300
     share_requests_per_minute: int = 60

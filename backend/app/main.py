@@ -14,6 +14,7 @@ from app.api.matches import router as matches_router
 from app.api.videos import router as videos_router
 from app.api.shares import router as shares_router
 from app.core.config import settings
+from app.core.uploads import UploadLimit
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Valorant Clips API", lifespan=lifespan)
+app.add_middleware(UploadLimit)
 app.include_router(auth_router)
 app.include_router(matches_router)
 app.include_router(videos_router)
