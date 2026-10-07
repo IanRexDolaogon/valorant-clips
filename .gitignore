@@ -7,3 +7,4 @@ dist/
 *.mkv
 storage/
 pgdata/
+.pytest_cache/
