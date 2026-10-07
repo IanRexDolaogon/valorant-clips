@@ -16,8 +16,8 @@ def encode(source, output, start_ms: int, end_ms: int, mode: str) -> None:
         raise ValueError("Invalid clip request")
     args = [settings.ffmpeg_path, "-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
         "-ss", str(start_ms / 1000), "-i", str(source), "-t", str((end_ms - start_ms) / 1000),
-        "-map", "0:v:0", "-map", "0:a:0?"]
-    args += ["-c", "copy"] if mode == "copy" else ["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"]
+        "-threads", "1", "-map", "0:v:0", "-map", "0:a:0?"]
+    args += ["-c", "copy"] if mode == "copy" else ["-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-c:a", "aac"]
     # Stream copy starts at keyframes; choose reencode for exact timing.
     subprocess.run(args + ["-movflags", "+faststart", "-f", "mp4", str(output)],
         check=True, capture_output=True, timeout=settings.ffmpeg_timeout_seconds)
@@ -50,7 +50,7 @@ def process(clip_id: int) -> None:
     try:
         with SessionLocal() as db:
             clip = db.execute(text("SELECT c.*,v.storage_key AS source_key,v.duration_ms FROM clips c JOIN videos v "
-                "ON v.id=c.video_id WHERE c.id=:id AND v.status='validated' FOR UPDATE OF c"),
+                "ON v.id=c.video_id WHERE c.id=:id AND v.status='validated' AND v.expires_at>now() FOR UPDATE OF v,c"),
                 {"id": clip_id}).mappings().first()
             if not clip or clip["status"] != "queued":
                 return
@@ -59,17 +59,16 @@ def process(clip_id: int) -> None:
                 raise ValueError("Clip exceeds recording")
             db.execute(text("UPDATE clips SET status='processing' WHERE id=:id"), {"id": clip_id})
             db.execute(text("UPDATE processing_jobs SET status='processing',progress=10,started_at=now() WHERE clip_id=:id"), {"id": clip_id})
-            db.commit()
-        key = uuid.uuid4().hex + ".mp4"
-        output = storage.path_for(key)
-        temporary = output.with_suffix(".partial")
-        try:
-            encode(storage.source(clip["source_key"]), temporary, clip["start_ms"], clip["end_ms"], clip["encode_mode"])
-            temporary.replace(output)
-        finally:
-            temporary.unlink(missing_ok=True)
-        storage.publish(key)
-        with SessionLocal() as db:
+            # Hold the parent lock through publication so cleanup cannot orphan worker output.
+            key = uuid.uuid4().hex + ".mp4"
+            output = storage.path_for(key)
+            temporary = output.with_suffix(".partial")
+            try:
+                encode(storage.source(clip["source_key"]), temporary, clip["start_ms"], clip["end_ms"], clip["encode_mode"])
+                temporary.replace(output)
+            finally:
+                temporary.unlink(missing_ok=True)
+            storage.publish(key)
             db.execute(text("UPDATE clips SET status='ready',storage_key=:key WHERE id=:id"), {"key": key, "id": clip_id})
             db.execute(text("UPDATE processing_jobs SET status='ready',progress=100,duration_ms=:duration,"
                 "peak_mem_kb=:memory,error=NULL,finished_at=:finished WHERE clip_id=:id"),
@@ -78,6 +77,6 @@ def process(clip_id: int) -> None:
             db.commit()
     except Exception:
         if output:
-            output.unlink(missing_ok=True)
+            storage.delete(output.name)
         failed(clip_id)
         raise RuntimeError("Clip processing failed") from None

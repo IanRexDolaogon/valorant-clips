@@ -14,7 +14,7 @@ from app.workers.clips import failure_callback
 
 def run() -> None:
     queue = Queue("clips", connection=redis)
-    # ponytail: one worker per Droplet; add worker replicas when queue latency warrants it.
+    # CV demo: one RQ worker, one job at a time; do not scale worker replicas.
     while True:
         try:
             with SessionLocal() as db:

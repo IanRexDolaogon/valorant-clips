@@ -13,6 +13,15 @@ Project reference for AI coding agents working in this repo: **what** we are bui
 
 A web app where Valorant players turn match recordings into shareable kill clips.
 
+**CV demo constraints (override earlier production plans):** This is a portfolio demonstration, not a commercial or production-ready app. Keep architecture clear and operational spending at zero; use local Compose without paid hosting or storage. Demonstrate sync, a distributed queue and retention without high-availability or scaling work.
+
+- Uploads are at most **10 MB (10,000,000 bytes)**, including total resumable upload size. API middleware rejects oversized request bodies with **413** before routing, including requests without Content-Length.
+- `ffprobe` validates duration before publication or clip processing. Videos longer than **15 seconds** return **400**.
+- `videos.expires_at` is database-generated from `created_at + 72 hours`, using UTC arithmetic. Source videos, clips, shares and processing jobs are one ephemeral media aggregate. Users and shared match/event data are not media records and remain available for the demo.
+- API access and signed media links stop at expiry. **Hourly cron** queries `expires_at < now()`, deletes S3/R2 objects (when configured) and local files first, then deletes the video row, cascading to clips, shares and jobs. Storage failures retain rows for the next retry. Physical deletion can lag expiry by up to an hour while services are running; hourly cron cannot promise deletion at exactly 72 hours.
+- All transcoding stays in RQ. Run exactly one worker replica; one job at a time, one CPU and one FFmpeg codec thread. API duration probing is validation, not transcoding, and runs outside the async event loop.
+- Retention bounds per-upload lifetime; it does not guarantee a provider's free allowance under unlimited traffic. No paid infrastructure is provisioned. S3-compatible storage remains optional and mocked in tests until a free bucket is provided.
+
 **User flow**
 1. User signs up and links their Riot account.
 2. App pulls a match from Riot's match API and stores its kill events (with timestamps).
@@ -49,11 +58,11 @@ clip_end_ms   = kill.time_since_game_start_ms + video.sync_offset_ms + PADDING_A
 | DB | PostgreSQL 16 |
 | Queue | Redis + RQ (or Celery) |
 | Video | FFmpeg (worker) |
-| Storage | DigitalOcean Spaces (S3-compatible); local `storage/` in dev |
+| Storage | Local `storage/` for the zero-spend demo; optional S3/R2-compatible bucket |
 | Tests | pytest + httpx/TestClient |
 | Containers | Docker + Docker Compose |
 | CI/CD | GitHub Actions |
-| Hosting | DigitalOcean (Droplet running Docker) |
+| Hosting | Local Docker Compose demo; no paid deployment |
 
 Do not add dependencies without a clear reason; ask first.
 
@@ -73,16 +82,17 @@ Do not add dependencies without a clear reason; ask first.
 - [x] Riot client + transactional match/kill ingestion, tested with mocked upstream responses
 - [ ] Live Riot production-key/RSO approval and verification
 - [x] Video upload: resumable chunks, limits, generated storage keys and ffprobe validation
+- [x] CV limits: 10 MB middleware/total upload ceiling, 15-second validation, 72-hour generated expiry and storage-first hourly cleanup
 - [x] Sync offset + bounded, repeat-safe kill clip planning
 - [x] FFmpeg/RQ worker, durable queued jobs, safe failures, wall-time and Linux peak-memory tracking
 - [x] Shares: random tokens, expiry, private access, revocation, signed media URLs and public page
 - [x] React frontend: folder/file picker, uploader, sync controls, clip status, preview and share UI; production build and browser playback checked
-- [ ] Broader frontend QA: native picker, large recordings, refresh/resume and non-Chromium browsers
+- [ ] Broader frontend QA: native picker, refresh/resume and non-Chromium browsers within demo limits
 - [ ] DigitalOcean Spaces integration verification (optional S3 support implemented; local storage tested)
 - [x] README and major-change/validation report (`docs/VALIDATION.md`)
-- [ ] Benchmarks, complete security review, DigitalOcean deployment and portfolio screenshots
+- [ ] Demo benchmarks and portfolio screenshots; production deployment/availability work is out of scope
 
-Latest local verification: **49 pytest tests passed on Windows and in the Linux API container**; React production build passed; the disposable Docker pipeline passed with a real RQ worker and both FFmpeg methods. Browser sign-in, recording selection, clip preview and anonymous share playback were checked. See `docs/VALIDATION.md` for scope and limits; this is a locally validated MVP, not a completed production deployment.
+Prior pipeline verification: **49 pytest tests passed on Windows and Linux**, production frontend build and browser playback passed. CV constraint retest: **58 pytest tests passed on Windows and Linux**; updated Docker pipeline, expiry cleanup, cron runtime command and frontend build passed. See `docs/VALIDATION.md`. This is a portfolio demo.
 
 Update this checklist when you finish an item.
 
@@ -124,7 +134,7 @@ Keep routers thin (parse/validate → call service → return). Business logic l
 
 ## 5. Database
 
-Tables: `users`, `riot_accounts`, `matches`, `match_players`, `rounds`, `kill_events`, `videos`, `clips`, `shares`, `processing_jobs`. Root `schema.sql` is the historical baseline. Authoritative changes are in `backend/alembic/versions/`: `0001` creates the baseline, `0002` adds case-insensitive email uniqueness, and `0003` adds upload offsets and clip/job constraints.
+Tables: `users`, `riot_accounts`, `matches`, `match_players`, `rounds`, `kill_events`, `videos`, `clips`, `shares`, `processing_jobs`. Root `schema.sql` is the historical baseline. Authoritative migrations: `0001` baseline, `0002` case-insensitive emails, `0003` upload offsets and clip/job constraints, `0004` generated media expiry and its cleanup index. Existing uploads receive expiry from their original creation time; migration alone does not delete files.
 
 Key relationships
 - `users 1—N riot_accounts`, `users 1—N videos`
@@ -189,9 +199,9 @@ pytest -v
 
 - **Free hosting is a constrained portfolio-demo option, not a production guarantee.** A frontend/API-only tier does not cover the full PostgreSQL, Redis/RQ, long-running FFmpeg worker and video-storage stack. No free provider has been validated for this project; check current resource limits, persistence, worker support, sleep/reclamation behaviour and overage charges before deployment. Do not hard-code changing provider allowances as project guarantees.
 - **Object storage does not eliminate local disk needs.** Uploads are assembled locally before ffprobe validation and optional S3 publication. Workers need local source files plus temporary/output clip space. The default API/worker share `storage/`; deploying them on separate hosts requires an explicit staging/storage design.
-- The default **20 GiB per-upload limit is an application ceiling, not a safe free-tier capacity target**. Before public demo uploads, reduce it to measured host capacity and implement per-user quotas and retention/cleanup. Those controls are not implemented yet; account for accumulated recordings, clips and concurrent work, not just one upload.
+- The **10 MB / 15-second ceiling and 72-hour retention** are demo limits. Hourly cleanup is implemented; per-user quotas are not. Use controlled demo traffic and account for temporary/output files as well as source uploads.
 - Validate worker compute/memory, CPU architecture compatibility, HTTPS, backups and restart recovery. Free-tier availability and local disk must not be the only protection for important data. Unrestricted public uploads and reliable video processing must not be advertised as free-tier capabilities without evidence.
-- DigitalOcean remains the planned production target. A free VM running Compose may be evaluated for a small demo; this documentation does not change the hosting architecture or establish a verified deployment. See README's "Free deployment limitations" section.
+- Paid DigitalOcean deployment is out of scope. Local Compose has no hosting bill. No remote free provider has been verified for this stack.
 
 ---
 
@@ -287,4 +297,4 @@ Every feature ships with tests. Minimum coverage areas: authentication, key endp
 
 ## 13. Definition of done (project level)
 
-Functional app; responsive frontend; working API; PostgreSQL implemented; auth/authorization; validation and error handling; Docker works locally; tests exist and pass reliably; clean GitHub repo with no secrets; CI green; deployed on DigitalOcean with HTTPS and logging; README with architecture diagram, API docs and screenshots; owner can explain the whole system unaided.
+Functional CV demo; responsive frontend; working API and PostgreSQL; auth/ownership and validation; 10 MB / 15-second uploads; 72-hour expiry with hourly cleanup; one asynchronous worker; Docker and tests pass; no committed secrets; CI green; zero-spend local operation; README with architecture, API docs and portfolio screenshots; owner can explain the system unaided. Production deployment and high availability are not required.

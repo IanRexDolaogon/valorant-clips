@@ -22,7 +22,7 @@ def start(data: Upload, user_id: int = Depends(current_user), db: Session = Depe
 
 @router.get("", response_model=list[Video])
 def list_videos(user_id: int = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
-    return [dict(row) for row in db.execute(text("SELECT * FROM videos WHERE user_id=:uid ORDER BY id DESC LIMIT 100"),
+    return [dict(row) for row in db.execute(text("SELECT * FROM videos WHERE user_id=:uid AND expires_at>now() ORDER BY id DESC LIMIT 100"),
         {"uid": user_id}).mappings()]
 
 

@@ -45,6 +45,7 @@ services:
     build: ./backend
     env_file: .env
     command: ["python", "-m", "app.workers.run"]
+    cpus: 1.0
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -52,6 +53,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
+
+  cleanup:
+    build: ./backend
+    env_file: .env
+    command: ["python", "-m", "app.workers.cleanup", "--schedule"]
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
       api:
         condition: service_healthy
 

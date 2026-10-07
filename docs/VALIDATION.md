@@ -1,5 +1,22 @@
 # Local pipeline change and validation report
 
+## CV demo constraints update — 2026-10-08
+
+| Major change | Reason / affected areas | Validation |
+|---|---|---|
+| Strict upload ceiling | `core/uploads.py` middleware bounds video requests before routing, including streamed bodies without Content-Length. Settings and upload metadata enforce at most 10,000,000 bytes across chunks. | Header rejection, streamed overflow, exact 10 MB boundary and oversized declared total passed. Existing chunk and offset tests still pass. |
+| Short demo footage | `storage.probe` rejects duration above 15 seconds with 400 before publication. UI describes limits; synthetic demo events fit a 12–15 second video. | Real ffprobe tests accept 15 seconds and reject 15.1 seconds; rejected media is never published. Frontend Docker build passed. |
+| 72-hour media aggregate expiry | Migration `0004` adds indexed, UTC-generated `videos.expires_at`. Video/clip/share/media access rejects expired uploads; signed URLs are capped at media expiry. | Database calculation is exactly 72 hours. Expired owner preview, video listing, share playback and clip planning are rejected; expired queued clips are not encoded. |
+| Storage-first hourly cleanup | Native cron runs `app.workers.cleanup` at minute zero each hour. Optional bucket deletes and local-file removal precede the video row deletion; existing FKs cascade to clips, shares and processing jobs. | Tests verify bucket deletion occurs while the row exists, local files and dependent rows are removed, unexpired media survives, deletion failure retains the row, and retry is idempotent. Real Docker smoke cleanup passed. Installed hourly crontab and cron environment restoration were verified by running its command. |
+| Bounded asynchronous worker | Existing RQ worker processes one job at a time; Compose limits it to one CPU, FFmpeg codec threads to one. Parent-row locking serializes publication with cleanup. No API transcoding. | Actual separate RQ worker produced copy and reencode clips with positive processing/RSS metrics. Linux and Windows suites passed. |
+| Portfolio scope / zero spend | README and PROJECT now define a CV demo, local storage/Compose and no paid deployment requirement. Existing authentication/ownership stays in place. | No paid service was provisioned, no new Python dependency added, and no development DB migration/reset or `.env` edit performed. |
+
+Results: **58 passed, 1 non-failing Starlette deprecation warning**, on both Windows and Linux; frontend production Docker build passed; complete disposable Docker pipeline, expiry cleanup and cron command passed. CI includes the cleanup service and cron command in its Docker job; require green checks on the new PR before merging.
+
+Limits: media becomes inaccessible at 72 hours, but hourly physical deletion can lag by up to an hour while the stack runs, or longer when stopped/unavailable. Associated media records are videos, clips, shares and processing jobs; accounts and reusable shared match metadata remain. A real S3/R2 bucket is unverified (deletion order/failure tests use a fake client). Local Compose incurs no hosting/storage subscription; TTL alone cannot guarantee a remote free allowance under unlimited traffic. This is not production availability work. The publication lock keeps job status changes in one transaction, so UI polling sees queued until ready/failed.
+
+The earlier report below records the original pipeline implementation and remains historical; its production deployment/security roadmap is superseded by the CV scope above.
+
 Date: 2026-10-08 (Asia/Shanghai). Scope: close out backend retesting and the local Docker recording-to-share MVP. This report does not claim production deployment or live Riot/Spaces verification.
 
 ## Major changes

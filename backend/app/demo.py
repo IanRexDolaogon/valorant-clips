@@ -19,17 +19,17 @@ def main() -> None:
         uid = db.scalar(text("INSERT INTO users(email,password_hash,display_name) VALUES (:email,:hash,:name) RETURNING id"),
             {"email": data.email, "hash": password_hasher.hash(data.password), "name": data.display_name})
         match = db.scalar(text("INSERT INTO matches(riot_match_id,map_id,queue_id,started_at,duration_ms) "
-            "VALUES (:riot_id,'synthetic','DEMO: synthetic timestamps',now(),30000) RETURNING id"), {"riot_id": f"demo-{uid}"})
+            "VALUES (:riot_id,'synthetic','DEMO: synthetic timestamps',now(),15000) RETURNING id"), {"riot_id": f"demo-{uid}"})
         puuid = f"synthetic-{uid}"
         db.execute(text("INSERT INTO match_players(match_id,puuid,user_id) VALUES (:match,:puuid,:uid)"),
             {"match": match, "puuid": puuid, "uid": uid})
         db.execute(text("INSERT INTO rounds(match_id,round_number) VALUES (:match,0)"), {"match": match})
-        for time in [5000, 15000, 25000]:
+        for time in [3000, 7000, 11000]:
             db.execute(text("INSERT INTO kill_events(match_id,round_number,killer_puuid,victim_puuid,time_since_game_start_ms,time_since_round_start_ms) "
                 "VALUES (:match,0,:puuid,'synthetic-opponent',CAST(:time AS INTEGER),CAST(:time AS INTEGER))"),
                 {"match": match, "puuid": puuid, "time": time})
         db.commit()
-    print("Synthetic demo match created. Sign in and upload a recording of at least 30 seconds.")
+    print("Synthetic demo match created. Upload a 12–15 second video no larger than 10 MB.")
 
 
 if __name__ == "__main__":

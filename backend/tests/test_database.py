@@ -14,7 +14,7 @@ def test_migrations_create_all_tables_and_indexes(db_connection):
         "alembic_version", "users", "riot_accounts", "matches", "match_players",
         "rounds", "kill_events", "videos", "clips", "shares", "processing_jobs",
     }
-    assert db_connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+    assert db_connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
     assert "idx_kills_match_time" in {
         index["name"] for index in inspector.get_indexes("kill_events")
     }

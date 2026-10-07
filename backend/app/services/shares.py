@@ -12,7 +12,8 @@ from app.services import storage
 
 
 def owned_clip(db: Session, user_id: int, clip_id: int) -> dict:
-    clip = db.execute(text("SELECT c.* FROM clips c JOIN videos v ON v.id=c.video_id WHERE c.id=:id AND v.user_id=:uid"),
+    clip = db.execute(text("SELECT c.*,v.expires_at AS media_expires_at FROM clips c JOIN videos v ON v.id=c.video_id "
+        "WHERE c.id=:id AND v.user_id=:uid AND v.expires_at>now()"),
         {"id": clip_id, "uid": user_id}).mappings().first()
     if not clip:
         raise HTTPException(404, "Clip not found")
@@ -34,9 +35,9 @@ def create(db: Session, user_id: int, clip_id: int, data: CreateShare) -> Share:
 
 
 def public_clip(db: Session, token: str, user_id: int | None = None) -> dict:
-    share = db.execute(text("SELECT c.*,s.expires_at,s.visibility,v.user_id FROM shares s "
+    share = db.execute(text("SELECT c.*,s.expires_at,s.visibility,v.user_id,v.expires_at AS media_expires_at FROM shares s "
         "JOIN clips c ON c.id=s.clip_id JOIN videos v ON v.id=c.video_id "
-        "WHERE s.token=:token AND c.status='ready' AND (s.expires_at IS NULL OR s.expires_at>now())"),
+        "WHERE s.token=:token AND c.status='ready' AND v.expires_at>now() AND (s.expires_at IS NULL OR s.expires_at>now())"),
         {"token": token}).mappings().first()
     if not share or share["visibility"] == "private" and share["user_id"] != user_id:
         raise HTTPException(404, "Share not found or expired")
@@ -45,7 +46,7 @@ def public_clip(db: Session, token: str, user_id: int | None = None) -> dict:
 
 def media(clip: dict, *, share_token: str | None = None, user_id: int | None = None) -> Media:
     now = datetime.now(timezone.utc)
-    expires = min(now + timedelta(seconds=60), clip.get("expires_at") or now + timedelta(seconds=60))
+    expires = min(now + timedelta(seconds=60), clip.get("expires_at") or now + timedelta(seconds=60), clip["media_expires_at"])
     seconds = int((expires - now).total_seconds())
     if seconds < 1:
         raise HTTPException(404, "Share expired")

@@ -31,6 +31,14 @@ def publish(key: str) -> None:
             ExtraArgs={"ContentType": "video/mp4" if key.endswith(".mp4") else "application/octet-stream"})
 
 
+def delete(key: str) -> None:
+    path = path_for(key)
+    if settings.storage_bucket:
+        s3().delete_object(Bucket=settings.storage_bucket, Key=key)
+    for suffix in (path.suffix, ".partial", ".download"):
+        path.with_suffix(suffix).unlink(missing_ok=True)
+
+
 def source(key: str):
     path = path_for(key)
     if not path.exists() and settings.storage_bucket:
@@ -53,6 +61,8 @@ def probe(path) -> int:
             stream.get("codec_type") == "video" for stream in data["streams"]
         ) or not 0 < duration <= 2147483:
             raise ValueError
+        if duration > 15:
+            raise HTTPException(400, "Video duration exceeds 15 seconds")
         return int(duration * 1000)
     except (subprocess.SubprocessError, ValueError, KeyError, OSError):
         raise HTTPException(422, "Recording must be a valid MP4, MKV or WebM video") from None
