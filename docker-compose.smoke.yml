@@ -1,0 +1,43 @@
+# Disposable validation overlay; use only with -p vclips-smoke and the root Compose file.
+services:
+  db:
+    env_file: !override [.env.example]
+    environment:
+      POSTGRES_USER: vclips_test
+      POSTGRES_PASSWORD: smoke-only
+      POSTGRES_DB: vclips_smoke_test
+    ports: !reset []
+    volumes: !reset []
+    tmpfs: /var/lib/postgresql/data
+
+  redis:
+    ports: !reset []
+
+  api:
+    env_file: !override [.env.example]
+    environment:
+      DATABASE_URL: postgresql+psycopg://vclips_test:smoke-only@db:5432/vclips_smoke_test
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${SMOKE_JWT_SECRET:?Set a random SMOKE_JWT_SECRET before validation}
+      APP_ENV: development
+      FRONTEND_URL: http://localhost:18080
+      PUBLIC_API_URL: http://localhost:18080/api
+      STORAGE_BUCKET: ""
+    ports: !override ["127.0.0.1:18000:8000"]
+    volumes: !override ["smoke-storage:/app/storage"]
+
+  worker:
+    env_file: !override [.env.example]
+    environment:
+      DATABASE_URL: postgresql+psycopg://vclips_test:smoke-only@db:5432/vclips_smoke_test
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${SMOKE_JWT_SECRET:?Set a random SMOKE_JWT_SECRET before validation}
+      APP_ENV: development
+      STORAGE_BUCKET: ""
+    volumes: !override ["smoke-storage:/app/storage"]
+
+  frontend:
+    ports: !override ["127.0.0.1:18080:80"]
+
+volumes:
+  smoke-storage:

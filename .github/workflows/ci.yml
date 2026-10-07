@@ -8,6 +8,21 @@ on:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vclips_test
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: vclips_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U vclips_test -d vclips_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://vclips_test:test-only@localhost:5432/vclips_test
+      TEST_DATABASE_URL: postgresql+psycopg://vclips_test:test-only@localhost:5432/vclips_test
+      JWT_SECRET: ci-test-secret-at-least-32-characters
     defaults:
       run:
         working-directory: backend
@@ -19,4 +34,33 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: alembic upgrade head
       - run: pytest -v
+
+  docker-pipeline:
+    runs-on: ubuntu-latest
+    env:
+      SMOKE_JWT_SECRET: ci-smoke-test-secret-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start disposable stack
+        run: >-
+          docker compose -p vclips-smoke --env-file .env.example
+          -f docker-compose.yml -f docker-compose.smoke.yml
+          up -d --build --wait --wait-timeout 180 db redis api worker frontend
+      - name: Verify real upload, worker and share pipeline
+        run: >-
+          docker compose -p vclips-smoke --env-file .env.example
+          -f docker-compose.yml -f docker-compose.smoke.yml
+          exec -T api python -m tests.smoke_docker
+      - name: Show failure diagnostics
+        if: failure()
+        run: >-
+          docker compose -p vclips-smoke --env-file .env.example
+          -f docker-compose.yml -f docker-compose.smoke.yml logs --tail 100 api worker frontend
+      - name: Remove disposable stack
+        if: always()
+        run: >-
+          docker compose -p vclips-smoke --env-file .env.example
+          -f docker-compose.yml -f docker-compose.smoke.yml down -v

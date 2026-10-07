@@ -62,21 +62,27 @@ Do not add dependencies without a clear reason; ask first.
 ## 3. Current status
 
 - [x] Repo, `.gitignore`, `.env.example`
-- [x] Docker Compose: `db` (Postgres), `redis`, `api`
-- [x] `schema.sql` loaded into Postgres on first init (10 tables)
+- [x] Docker Compose: PostgreSQL, Redis, API, RQ worker and React/Nginx frontend; isolated full-pipeline smoke check
+- [x] PostgreSQL baseline (10 tables); Alembic now manages initialization
 - [x] FastAPI skeleton with `GET /health`, first pytest passing
 - [x] `backend/Dockerfile` (`python:3.12-slim`)
-- [ ] GitHub Actions CI (tests on push/PR) — verify it's green
-- [ ] Settings (`pydantic-settings`) + SQLAlchemy session
-- [ ] Alembic migrations (replace raw `schema.sql` auto-load)
-- [ ] Auth: register/login, password hashing, JWT, tests
-- [ ] Riot client + match/kill ingestion
-- [ ] Video upload (chunked) + validation
-- [ ] Sync offset + clip planner
-- [ ] FFmpeg worker + job tracking
-- [ ] Shares + public clip page
-- [ ] Frontend (folder picker, uploader, clip editor, share UI)
-- [ ] Benchmarks, security pass, deployment, README, screenshots
+- [x] GitHub Actions CI — PostgreSQL backend tests and the Docker pipeline passed on PR #4; require green checks before merge
+- [x] Settings (`pydantic-settings`) + SQLAlchemy session
+- [x] Alembic migrations (replace raw `schema.sql` auto-load), schema constraints/index checks, real DB health test
+- [x] Auth: register/login, Argon2 password hashing, JWT, ownership checks, Redis rate limiting and tests
+- [x] Riot client + transactional match/kill ingestion, tested with mocked upstream responses
+- [ ] Live Riot production-key/RSO approval and verification
+- [x] Video upload: resumable chunks, limits, generated storage keys and ffprobe validation
+- [x] Sync offset + bounded, repeat-safe kill clip planning
+- [x] FFmpeg/RQ worker, durable queued jobs, safe failures, wall-time and Linux peak-memory tracking
+- [x] Shares: random tokens, expiry, private access, revocation, signed media URLs and public page
+- [x] React frontend: folder/file picker, uploader, sync controls, clip status, preview and share UI; production build and browser playback checked
+- [ ] Broader frontend QA: native picker, large recordings, refresh/resume and non-Chromium browsers
+- [ ] DigitalOcean Spaces integration verification (optional S3 support implemented; local storage tested)
+- [x] README and major-change/validation report (`docs/VALIDATION.md`)
+- [ ] Benchmarks, complete security review, DigitalOcean deployment and portfolio screenshots
+
+Latest local verification: **49 pytest tests passed on Windows and in the Linux API container**; React production build passed; the disposable Docker pipeline passed with a real RQ worker and both FFmpeg methods. Browser sign-in, recording selection, clip preview and anonymous share playback were checked. See `docs/VALIDATION.md` for scope and limits; this is a locally validated MVP, not a completed production deployment.
 
 Update this checklist when you finish an item.
 
@@ -95,15 +101,16 @@ valorant-clips/
 │   │   ├── services/     # riot_client, sync, clip_planner, storage
 │   │   ├── workers/      # RQ tasks (FFmpeg jobs)
 │   │   └── main.py
-│   ├── alembic/          # (planned)
+│   ├── alembic/          # versioned migrations
 │   ├── tests/
 │   ├── Dockerfile
 │   ├── pytest.ini
 │   └── requirements.txt
-├── frontend/             # React + Vite (planned)
-│   └── src/features/     # folder-picker, uploader, clip-editor, share
+├── frontend/             # React + Vite, production Nginx container
+│   └── src/              # main.jsx and style.css; split only when needed
 ├── .github/workflows/ci.yml
 ├── docker-compose.yml
+├── docker-compose.smoke.yml # disposable validation overlay
 ├── schema.sql            # initial schema; becomes reference doc after Alembic
 ├── .env.example          # committed; real .env is NOT
 ├── .agents/skills/       # agent workflow skills (ponytail.md, ...)
@@ -117,7 +124,7 @@ Keep routers thin (parse/validate → call service → return). Business logic l
 
 ## 5. Database
 
-Tables: `users`, `riot_accounts`, `matches`, `match_players`, `rounds`, `kill_events`, `videos`, `clips`, `shares`, `processing_jobs`. Full DDL in `schema.sql`.
+Tables: `users`, `riot_accounts`, `matches`, `match_players`, `rounds`, `kill_events`, `videos`, `clips`, `shares`, `processing_jobs`. Root `schema.sql` is the historical baseline. Authoritative changes are in `backend/alembic/versions/`: `0001` creates the baseline, `0002` adds case-insensitive email uniqueness, and `0003` adds upload offsets and clip/job constraints.
 
 Key relationships
 - `users 1—N riot_accounts`, `users 1—N videos`
@@ -149,7 +156,7 @@ docker compose up -d --build
 docker compose ps
 docker compose logs api
 docker compose down          # stop
-docker compose down -v       # stop AND wipe DB volume (re-runs schema.sql)
+docker compose down -v       # DESTRUCTIVE: wipes dev DB; API re-runs migrations on startup
 
 # DB shell
 docker compose exec db psql -U vclips -d vclips -c "\dt"
@@ -158,12 +165,33 @@ docker compose exec db psql -U vclips -d vclips -c "\dt"
 cd backend
 .\.venv\Scripts\Activate.ps1
 pytest -v
+
+# Integration tests use an isolated database, never development data.
+# Run the following Docker command from the repository root:
+docker compose --profile test up -d --wait test-db
+# Then from backend/:
+$env:DATABASE_URL = "postgresql+psycopg://vclips_test:test-only@127.0.0.1:5433/vclips_test"
+$env:TEST_DATABASE_URL = $env:DATABASE_URL
+python -m alembic upgrade head
+pytest -v
 ```
 
 - Local venv uses Python 3.12 (`py -3.12 -m venv .venv`). Containers and CI also use 3.12.
+- Fresh databases initialize with `alembic upgrade head`. Existing databases created by the original `schema.sql` must have their columns, constraints and indexes checked against baseline `0001` before running `alembic stamp 0001`; never stamp an unknown schema or reset a populated volume. See README.
 - API runs at `http://localhost:8000` (Swagger at `/docs`).
+- Docker frontend runs at `http://localhost:8080`; it proxies `/api`. `PUBLIC_API_URL` should use that origin plus `/api` so signed local media works with the frontend content security policy.
+- Authentication requires a random `JWT_SECRET` of at least 32 characters. Do not use the `.env.example` placeholder.
+- For repeatable full-stack verification, use the disposable Compose overlay and `python -m tests.smoke_docker` commands in README. The check refuses to run outside `vclips_smoke_test` and uses synthetic match events instead of live Riot calls.
 - `.env` is gitignored. Add new variables to `.env.example` with placeholder values.
 - Project root contains a space in a parent folder name; quote paths in scripts.
+
+### Free deployment limitations
+
+- **Free hosting is a constrained portfolio-demo option, not a production guarantee.** A frontend/API-only tier does not cover the full PostgreSQL, Redis/RQ, long-running FFmpeg worker and video-storage stack. No free provider has been validated for this project; check current resource limits, persistence, worker support, sleep/reclamation behaviour and overage charges before deployment. Do not hard-code changing provider allowances as project guarantees.
+- **Object storage does not eliminate local disk needs.** Uploads are assembled locally before ffprobe validation and optional S3 publication. Workers need local source files plus temporary/output clip space. The default API/worker share `storage/`; deploying them on separate hosts requires an explicit staging/storage design.
+- The default **20 GiB per-upload limit is an application ceiling, not a safe free-tier capacity target**. Before public demo uploads, reduce it to measured host capacity and implement per-user quotas and retention/cleanup. Those controls are not implemented yet; account for accumulated recordings, clips and concurrent work, not just one upload.
+- Validate worker compute/memory, CPU architecture compatibility, HTTPS, backups and restart recovery. Free-tier availability and local disk must not be the only protection for important data. Unrestricted public uploads and reliable video processing must not be advertised as free-tier capabilities without evidence.
+- DigitalOcean remains the planned production target. A free VM running Compose may be evaluated for a small demo; this documentation does not change the hosting architecture or establish a verified deployment. See README's "Free deployment limitations" section.
 
 ---
 
@@ -214,7 +242,7 @@ Every feature ships with tests. Minimum coverage areas: authentication, key endp
 ## 10. Riot API and legal notes
 
 - Match/kill data comes from Riot's Valorant match API (VAL-MATCH-V1). Verify current endpoints and fields in Riot's docs before coding against them.
-- A personal dev key only works for the owner's account and **expires every 24h**. A production key requires an approved application; assume dev-key limits while building and isolate the client in `services/riot_client.py` so it's easy to mock.
+- VALORANT has no personal keys. Daily-expiring development keys do not establish VALORANT access. Live account linking requires an approved production key and Riot Sign On (RSO), including explicit player opt-in. Build and test with mock data until access is approved; isolate the client in `services/riot_client.py`. Sources: https://developer.riotgames.com/docs/valorant and https://developer.riotgames.com/docs/faqs.
 - Respect rate limits; cache responses; never hammer the API in loops.
 - The site needs a disclaimer that it is **not endorsed by or affiliated with Riot Games**. Do not use Riot logos or branding as if official.
 - Do not build features that read game memory, hook the client, or touch anti-cheat territory.

@@ -5,3 +5,9 @@ psycopg[binary]
 pydantic-settings
 pytest
 httpx
+alembic
+argon2-cffi
+PyJWT
+redis
+rq
+boto3
